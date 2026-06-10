@@ -287,7 +287,61 @@ searchInput.addEventListener("input", function(e) {
 
     }, 300); 
 });
-
+function setupWordClickHandlers() {
+    document.querySelectorAll('.word').forEach(wordEl => {
+        wordEl.style.cursor = 'pointer'; // visual feedback
+        
+        wordEl.addEventListener('click', (e) => {
+            e.stopPropagation();
+            
+            const lineIndex = parseInt(wordEl.dataset.line);
+            const wordIndex = parseInt(wordEl.dataset.word);
+            const lineData = currentLyrics[lineIndex];
+            
+            if (!lineData) return;
+            
+            // Calculate approximate timestamp for this word
+            const lineStartMs = lineData.time;
+            const nextLineStartMs = (lineIndex + 1 < currentLyrics.length) 
+                ? currentLyrics[lineIndex + 1].time 
+                : lineStartMs + 4000; // fallback ~4 seconds
+            
+            // Simple even spacing assumption for words in the line
+            const lineDurationMs = nextLineStartMs - lineStartMs;
+            const wordDurationMs = lineDurationMs / Math.max(1, lineData.words.length);
+            const wordStartMs = lineStartMs + (wordIndex * wordDurationMs);
+            
+            const targetMs = Math.max(0, wordStartMs - 300); // small lead-in
+            
+            // Update offset so timing lines up
+            offsetMs = targetMs;
+            document.getElementById("offset").value = Math.round(offsetMs);
+            
+            // Seek audio if available
+            if (audio && !document.getElementById("lyricsOnly").checked) {
+                audio.currentTime = targetMs / 1000;
+                if (isPlaying) {
+                    audio.play().catch(console.error);
+                }
+            } else {
+                // Lyrics-only mode
+                timerStart = Date.now() - targetMs;
+            }
+            
+            // Visual feedback
+            wordEl.style.transition = 'all 0.2s';
+            wordEl.style.background = '#00ff9d';
+            wordEl.style.color = '#000';
+            setTimeout(() => {
+                if (wordEl) wordEl.style.background = '';
+                if (wordEl) wordEl.style.color = '';
+            }, 400);
+            
+            statusMessage.textContent = `⏱️ Synced to: "${wordEl.textContent}"`;
+            setTimeout(() => statusMessage.textContent = "", 1800);
+        });
+    });
+}
 function renderSuggestions(tracks, source) {
     suggestionsBox.innerHTML = "";
     if (!tracks || tracks.length === 0) {
@@ -383,15 +437,23 @@ function renderLyrics(lyricsText) {
     currentLyrics = parseLRC(lyricsText);
     const container = document.getElementById("lyricsContainer");
     container.innerHTML = "";
-    currentLyrics.forEach((line, i) => {
+    
+    currentLyrics.forEach((line, lineIndex) => {
         const div = document.createElement("div");
         div.className = "line";
-        div.dataset.index = i;
-        div.innerHTML = line.words.map(word => `<span class="word">${word}</span>`).join(' ');
+        div.dataset.index = lineIndex;
+        
+        // Create clickable words
+        div.innerHTML = line.words.map((word, wordIndex) => {
+            return `<span class="word" data-line="${lineIndex}" data-word="${wordIndex}">${word}</span>`;
+        }).join(' ');
+        
         container.appendChild(div);
     });
-}
 
+    // Add click listeners to all words (after rendering)
+    setupWordClickHandlers();
+}
 // ==================== LYRIC UPDATER ====================
 function updateLyrics(currentMs) {
     const lines = document.querySelectorAll('.line');
