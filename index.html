@@ -299,6 +299,7 @@ function setupWordClickHandlers() {
         
         wordEl.addEventListener('click', (e) => {
             e.stopPropagation();
+            if (syncMode) return; // let line handler deal with it, or ignore
             
             const lineIndex = parseInt(wordEl.dataset.line);
             const wordIndex = parseInt(wordEl.dataset.word);
@@ -310,41 +311,16 @@ function setupWordClickHandlers() {
             const lineStartMs = lineData.time;
             const nextLineStartMs = (lineIndex + 1 < currentLyrics.length) 
                 ? currentLyrics[lineIndex + 1].time 
-                : lineStartMs + 4000; // fallback ~4 seconds
+                : lineStartMs + 4000;
             
-            // Simple even spacing assumption for words in the line
             const lineDurationMs = nextLineStartMs - lineStartMs;
             const wordDurationMs = lineDurationMs / Math.max(1, lineData.words.length);
             const wordStartMs = lineStartMs + (wordIndex * wordDurationMs);
+            const targetMs = Math.max(0, wordStartMs - 200);
             
-            const targetMs = Math.max(0, wordStartMs - 300); // small lead-in
-            
-            // Update offset so timing lines up
-            offsetMs = targetMs;
-            document.getElementById("offset").value = Math.round(offsetMs);
-            
-            // Seek audio if available
-            if (audio && !document.getElementById("lyricsOnly").checked) {
-                audio.currentTime = targetMs / 1000;
-                if (isPlaying) {
-                    audio.play().catch(console.error);
-                }
-            } else {
-                // Lyrics-only mode
-                timerStart = Date.now() - targetMs;
-            }
-            
-            // Visual feedback
-            wordEl.style.transition = 'all 0.2s';
-            wordEl.style.background = '#00ff9d';
-            wordEl.style.color = '#000';
-            setTimeout(() => {
-                if (wordEl) wordEl.style.background = '';
-                if (wordEl) wordEl.style.color = '';
-            }, 400);
-            
-            statusMessage.textContent = `⏱️ Synced to: "${wordEl.textContent}"`;
-            setTimeout(() => statusMessage.textContent = "", 1800);
+            seekTo(targetMs);
+            statusMessage.textContent = `⏩ Jumped to "${wordEl.textContent}"`;
+            setTimeout(() => statusMessage.textContent = "", 1200);
         });
     });
 }
@@ -499,16 +475,23 @@ function renderLyrics(lyricsText) {
         }).join(' ');
         
         div.addEventListener("click", (e) => {
-            if (!syncMode) return;
             e.stopPropagation();
-            const currentMs = getCurrentMs();
-            currentLyrics[lineIndex].time = Math.max(0, Math.round(currentMs));
-            div.classList.add("synced");
-            nextSyncIndex = lineIndex + 1;
-            updateSyncTarget();
-            saveTimings();
-            statusMessage.textContent = `✅ Line ${lineIndex + 1} timed at ${(currentMs/1000).toFixed(2)}s`;
-            setTimeout(() => statusMessage.textContent = "", 1200);
+            if (syncMode) {
+                const currentMs = getCurrentMs();
+                currentLyrics[lineIndex].time = Math.max(0, Math.round(currentMs));
+                div.classList.add("synced");
+                nextSyncIndex = lineIndex + 1;
+                updateSyncTarget();
+                saveTimings();
+                statusMessage.textContent = `✅ Line ${lineIndex + 1} timed at ${(currentMs/1000).toFixed(2)}s`;
+                setTimeout(() => statusMessage.textContent = "", 1200);
+            } else {
+                // Normal mode: seek to this line
+                const targetMs = Math.max(0, currentLyrics[lineIndex].time);
+                seekTo(targetMs);
+                statusMessage.textContent = `⏩ Jumped to line ${lineIndex + 1}`;
+                setTimeout(() => statusMessage.textContent = "", 1200);
+            }
         });
         
         container.appendChild(div);
@@ -532,6 +515,28 @@ function getCurrentMs() {
         currentMs += (audio.currentTime * 1000);
     }
     return currentMs;
+}
+
+function seekTo(targetMs) {
+    targetMs = Math.max(0, targetMs);
+    const lyricsOnly = !audio || document.getElementById("lyricsOnly").checked;
+
+    if (lyricsOnly) {
+        timerStart = Date.now() - targetMs;
+        if (!isPlaying) {
+            isPlaying = true;
+            tick();
+        }
+    } else if (audio) {
+        audio.currentTime = targetMs / 1000;
+        if (!isPlaying) {
+            audio.play().catch(console.error);
+            isPlaying = true;
+            tick();
+        }
+    }
+    // Immediately update display
+    updateLyrics(targetMs);
 }
 
 function updateSyncTarget() {
