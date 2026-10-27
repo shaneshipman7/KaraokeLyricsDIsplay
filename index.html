@@ -85,11 +85,14 @@
             border-radius: 6px;
             transition: all 0.1s linear;
         }
-        .word.active {
-            background: #00ff9d;
-            color: #000;
-            font-weight: bold;
-            transform: scale(1.08);
+        .line.sync-target {
+            outline: 2px dashed #ffaa00;
+            outline-offset: 4px;
+            opacity: 0.9;
+            background: rgba(255, 170, 0, 0.08);
+        }
+        .line.synced {
+            border-left: 3px solid #00ff9d;
         }
         
         .main-controls {
@@ -220,6 +223,7 @@
                 <button id="playBtn">▶ Play</button>
                 <button id="pauseBtn" class="secondary">⏸ Pause</button>
                 <button id="resetBtn" class="secondary">Reset</button>
+                <button id="syncBtn" class="secondary">🎯 Sync Timing</button>
                 <div class="offset-wrapper">
                     <label>Timing Offset (ms):</label>
                     <input type="number" id="offset" value="0">
@@ -227,6 +231,8 @@
             </div>
             
             <div class="control-group">
+                <button id="exportBtn" class="secondary">💾 Export LRC</button>
+                <button id="clearOverridesBtn" class="secondary">🗑️ Clear Saved</button>
                 <button id="copyBtn" class="secondary">Copy Lyrics</button>
                 <button id="fullScreenBtn">⛶ Full Screen</button>
             </div>
@@ -383,6 +389,9 @@ let isPlaying = false;
 let animationFrame = null;
 let offsetMs = 0;
 let timerStart = 0;
+let syncMode = false;
+let nextSyncIndex = 0;
+let currentSongKey = null;
 
 // ==================== LRC PARSER & FETCH ====================
 function parseLRC(lrcText) {
@@ -433,26 +442,106 @@ async function fetchLyrics(artist, title) {
     return null;
 }
 
+function getSongKey(artist, title) {
+    return `karaoke_timing_${(artist || "").trim().toLowerCase()}|${(title || "").trim().toLowerCase()}`;
+}
+
+function saveTimings() {
+    if (!currentSongKey || !currentLyrics.length) return;
+    const times = currentLyrics.map(l => l.time);
+    localStorage.setItem(currentSongKey, JSON.stringify(times));
+    statusMessage.textContent = "💾 Timings saved locally";
+    setTimeout(() => { if (statusMessage.textContent.includes("saved")) statusMessage.textContent = ""; }, 1500);
+}
+
+function loadTimings() {
+    if (!currentSongKey) return false;
+    const saved = localStorage.getItem(currentSongKey);
+    if (!saved) return false;
+    try {
+        const times = JSON.parse(saved);
+        if (Array.isArray(times) && times.length === currentLyrics.length) {
+            currentLyrics.forEach((line, i) => { line.time = times[i]; });
+            return true;
+        }
+    } catch (e) {}
+    return false;
+}
+
+function generateLRC() {
+    if (!currentLyrics.length) return "";
+    return currentLyrics.map(line => {
+        const totalMs = Math.max(0, line.time);
+        const min = Math.floor(totalMs / 60000);
+        const sec = Math.floor((totalMs % 60000) / 1000);
+        const ms = Math.floor(totalMs % 1000);
+        return `[${String(min).padStart(2,"0")}:${String(sec).padStart(2,"0")}.${String(ms).padStart(3,"0")}]${line.text}`;
+    }).join("\n");
+}
+
 function renderLyrics(lyricsText) {
     currentLyrics = parseLRC(lyricsText);
+    const artist = document.getElementById("artist").value.trim();
+    const title = document.getElementById("title").value.trim();
+    currentSongKey = getSongKey(artist, title);
+    const hadOverrides = loadTimings();
+    
     const container = document.getElementById("lyricsContainer");
     container.innerHTML = "";
     
     currentLyrics.forEach((line, lineIndex) => {
         const div = document.createElement("div");
-        div.className = "line";
+        div.className = "line" + (hadOverrides ? " synced" : "");
         div.dataset.index = lineIndex;
         
-        // Create clickable words
         div.innerHTML = line.words.map((word, wordIndex) => {
             return `<span class="word" data-line="${lineIndex}" data-word="${wordIndex}">${word}</span>`;
         }).join(' ');
         
+        div.addEventListener("click", (e) => {
+            if (!syncMode) return;
+            e.stopPropagation();
+            const currentMs = getCurrentMs();
+            currentLyrics[lineIndex].time = Math.max(0, Math.round(currentMs));
+            div.classList.add("synced");
+            nextSyncIndex = lineIndex + 1;
+            updateSyncTarget();
+            saveTimings();
+            statusMessage.textContent = `✅ Line ${lineIndex + 1} timed at ${(currentMs/1000).toFixed(2)}s`;
+            setTimeout(() => statusMessage.textContent = "", 1200);
+        });
+        
         container.appendChild(div);
     });
 
-    // Add click listeners to all words (after rendering)
     setupWordClickHandlers();
+    if (hadOverrides) {
+        statusMessage.textContent = "📂 Loaded saved timing overrides";
+        setTimeout(() => statusMessage.textContent = "", 2000);
+    }
+    nextSyncIndex = 0;
+    updateSyncTarget();
+}
+
+function getCurrentMs() {
+    let currentMs = offsetMs;
+    const lyricsOnly = !audio || document.getElementById("lyricsOnly").checked;
+    if (lyricsOnly) {
+        currentMs += (Date.now() - timerStart);
+    } else if (audio) {
+        currentMs += (audio.currentTime * 1000);
+    }
+    return currentMs;
+}
+
+function updateSyncTarget() {
+    document.querySelectorAll(".line").forEach(el => el.classList.remove("sync-target"));
+    if (!syncMode) return;
+    const lines = document.querySelectorAll(".line");
+    if (nextSyncIndex < lines.length) {
+        lines[nextSyncIndex].classList.add("sync-target");
+        lines[nextSyncIndex].scrollIntoView({ behavior: "smooth", block: "center" });
+    }
 }
 // ==================== LYRIC UPDATER ====================
 function updateLyrics(currentMs) {
@@ -601,6 +690,45 @@ document.getElementById("copyBtn").addEventListener("click", () => {
     if (currentLyrics.length === 0) return;
     const text = currentLyrics.map(l => l.text).join('\n');
     navigator.clipboard.writeText(text);
+});
+
+document.getElementById("syncBtn").addEventListener("click", () => {
+    syncMode = !syncMode;
+    const btn = document.getElementById("syncBtn");
+    if (syncMode) {
+        btn.textContent = "⏹ Stop Sync";
+        btn.style.background = "#ffaa00";
+        nextSyncIndex = 0;
+        updateSyncTarget();
+        statusMessage.textContent = "🎯 Sync mode: click each line as it starts";
+        if (!isPlaying && currentLyrics.length) {
+            document.getElementById("playBtn").click();
+        }
+    } else {
+        btn.textContent = "🎯 Sync Timing";
+        btn.style.background = "";
+        document.querySelectorAll(".line").forEach(el => el.classList.remove("sync-target"));
+        statusMessage.textContent = "Sync mode off";
+        setTimeout(() => statusMessage.textContent = "", 1000);
+    }
+});
+
+document.getElementById("exportBtn").addEventListener("click", () => {
+    if (!currentLyrics.length) return;
+    const lrc = generateLRC();
+    const title = document.getElementById("title").value.trim() || "lyrics";
+    const blob = new Blob([lrc], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${title}.lrc`;
+    a.click();
+    statusMessage.textContent = "💾 LRC downloaded";
+});
+
+document.getElementById("clearOverridesBtn").addEventListener("click", () => {
+    if (currentSongKey) localStorage.removeItem(currentSongKey);
+    statusMessage.textContent = "🗑️ Saved timings cleared (reload song to reset)";
+    setTimeout(() => statusMessage.textContent = "", 2000);
 });
 </script>
 </body>
