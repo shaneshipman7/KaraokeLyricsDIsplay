@@ -191,11 +191,10 @@
             <input type="text" id="searchQuery" placeholder="Type song title or artist..." autocomplete="off">
             <div id="suggestionsBox" class="suggestions-dropdown" style="display: none;"></div>
         </div>
-        <div style="margin:10px 0;">
-            <label style="font-size: 14px; color: #aaa; cursor: pointer;">
-                <input type="checkbox" id="searchByLyrics"> 
-                <strong>Search by lyrics</strong> (find song from a snippet)
-            </label>
+        <div class="form-group" style="position:relative; margin-bottom:20px;">
+            <label><strong>Search by Lyrics</strong></label>
+            <input type="text" id="lyricsSearchQuery" placeholder="Type a lyrics snippet..." autocomplete="off">
+            <div id="lyricsSuggestionsBox" class="suggestions-dropdown" style="display: none;"></div>
         </div>
         <input type="hidden" id="artist">
         <input type="hidden" id="title">
@@ -272,25 +271,6 @@ searchInput.addEventListener("input", function(e) {
         const searchId = Date.now();
         currentSearchId = searchId; 
 
-        const lyricsMode = document.getElementById("searchByLyrics")?.checked;
-
-        if (lyricsMode) {
-            try {
-                const res = await fetch("https://api.audd.io/findLyrics/?q=" + encodeURIComponent(value) + "&api_token=test");
-                if (currentSearchId !== searchId) return; 
-
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.status === "success" && data.result && data.result.length > 0) {
-                        renderSuggestions(data.result, "audd");
-                        return;
-                    }
-                }
-            } catch (err) { console.warn("AudD lyrics search failed", err); }
-            suggestionsBox.style.display = "none";
-            return;
-        }
-
         try {
             const res = await fetch("https://lrclib.net/api/search?q=" + encodeURIComponent(value));
             if (currentSearchId !== searchId) return; 
@@ -318,6 +298,75 @@ searchInput.addEventListener("input", function(e) {
 
     }, 300); 
 });
+
+// Lyrics search input
+const lyricsSearchInput = document.getElementById("lyricsSearchQuery");
+const lyricsSuggestionsBox = document.getElementById("lyricsSuggestionsBox");
+
+lyricsSearchInput.addEventListener("focus", () => {
+    if (lyricsSearchInput.value.trim().length >= 2 && lyricsSuggestionsBox.innerHTML.trim() !== "") {
+        lyricsSuggestionsBox.style.display = "block";
+    }
+});
+
+lyricsSearchInput.addEventListener("input", function(e) {
+    const value = e.target.value.trim();
+    clearTimeout(autocompleteTimeout);
+    
+    if (value.length < 2) {
+        lyricsSuggestionsBox.style.display = "none";
+        return;
+    }
+
+    autocompleteTimeout = setTimeout(async () => {
+        const searchId = Date.now();
+        currentSearchId = searchId; 
+
+        try {
+            const res = await fetch("https://api.audd.io/findLyrics/?q=" + encodeURIComponent(value) + "&api_token=test");
+            if (currentSearchId !== searchId) return; 
+
+            if (res.ok) {
+                const data = await res.json();
+                if (data.status === "success" && data.result && data.result.length > 0) {
+                    renderLyricsSuggestions(data.result);
+                    return;
+                }
+            }
+        } catch (err) { console.warn("AudD lyrics search failed", err); }
+        lyricsSuggestionsBox.style.display = "none";
+
+    }, 300); 
+});
+
+function renderLyricsSuggestions(tracks) {
+    lyricsSuggestionsBox.innerHTML = "";
+    if (!tracks || tracks.length === 0) {
+        lyricsSuggestionsBox.style.display = "none";
+        return;
+    }
+
+    const displayTracks = tracks.slice(0, 8);
+    displayTracks.forEach(track => {
+        const item = document.createElement("div");
+        item.className = "suggestion-item";
+        const title = track.title;
+        const artist = track.artist;
+        
+        item.innerHTML = `<div class="song-title">${title}</div><div class="artist-name">by ${artist}</div>`;
+        
+        item.addEventListener("click", () => {
+            document.getElementById("searchQuery").value = `${title} - ${artist}`;
+            document.getElementById("title").value = title;
+            document.getElementById("artist").value = artist;
+            lyricsSuggestionsBox.style.display = "none";
+            document.getElementById("generateBtn").click(); 
+        });
+        lyricsSuggestionsBox.appendChild(item);
+    });
+    lyricsSuggestionsBox.style.display = "block";
+}
+
 function setupWordClickHandlers() {
     document.querySelectorAll('.word').forEach(wordEl => {
         wordEl.style.cursor = 'pointer'; // visual feedback
@@ -389,6 +438,9 @@ function renderSuggestions(tracks, source) {
 document.addEventListener("click", (e) => {
     if (!e.target.closest("#searchQuery") && !e.target.closest("#suggestionsBox")) {
         suggestionsBox.style.display = "none";
+    }
+    if (!e.target.closest("#lyricsSearchQuery") && !e.target.closest("#lyricsSuggestionsBox")) {
+        lyricsSuggestionsBox.style.display = "none";
     }
 });
 
